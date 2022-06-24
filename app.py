@@ -64,7 +64,8 @@ def on_disconnect(client, userdata, rc):
 def on_message(client, userdata, mqtt_msg):
     '''MQTT message callback'''
     # print("message on topic %s: '%s'" % (mqtt_msg.topic, mqtt_msg.payload))
-    if mqtt_msg.topic.startswith("gw-response/send_data/"):
+    if mqtt_msg.topic.startswith("gw-event/received_data/"):
+        # print(mqtt_msg.payload)
         # Wirepas Mesh data packet, parse bytes to a Protocol Buffers message
         proto_msg = generic_message.GenericMessage()
         proto_msg.ParseFromString(mqtt_msg.payload)
@@ -82,21 +83,32 @@ def on_message(client, userdata, mqtt_msg):
                    recv_packet.travel_time_ms / 1000.0))
         else:
             # Some other data packet
-            print("data from %d: %d bytes, travel time: %.3f s, "
-                  "source, dest ep: %d, %d" %
-                  (recv_packet.source_address,
+            #network_address = str(hex(recv_packet.source_address)).replace("0x","")
+            nodeid = str(hex(recv_packet.source_address)).replace("0x","")
+            data = str(recv_packet.payload).replace("b'","").replace("'","")
+            print("data from %s: %d bytes, travel time: %.3f s, "
+                  "source, dest ep: %d, %d | Data: [%s]" %
+                  (nodeid,
                    len(recv_packet.payload),
                    recv_packet.travel_time_ms / 1000.0,
                    recv_packet.source_endpoint,
-                   recv_packet.destination_endpoint))
+                   recv_packet.destination_endpoint,
+                   data))
+                   
+    # elif mqtt_msg.topic.startswith("gw-response/send_data/"):
+        
+    #     proto_msg = generic_message.GenericMessage()
+    #     proto_msg.ParseFromString(mqtt_msg.payload)
+    #     recv_packet = proto_msg.wirepas.packet_received_event
+
     else:
         # Something else, print it as is
         print("message on topic %s: '%s'" % (mqtt_msg.topic, mqtt_msg.payload))
 
-def send_remote_api_ping(client, gw_id, sink_id):
+def send_remote_api_ping(client, gw_id, sink_id, payload):
     '''Message send function'''
 
-    print("sending data to %s:%s, broadcast" % (gw_id, sink_id))
+    print("sending data to %s:%s, broadcast | Payload: %s" % (gw_id, sink_id, payload)) 
 
     # Create an empty GenericMessage()
     proto_msg = generic_message.GenericMessage()
@@ -107,11 +119,11 @@ def send_remote_api_ping(client, gw_id, sink_id):
     sp_req.header.req_id = (
         random.randint(0, 2 ** 48))             # At least 48 bits of randomness
     sp_req.header.sink_id = sink_id
-    sp_req.destination_address = 0x5fb7eb03     # Broadcast
-    sp_req.source_endpoint = 6                # Wirepas reserved
-    sp_req.destination_endpoint = 100           # Remote API
+    sp_req.destination_address = int(payload['NodeID'], 16)     # Broadcast
+    sp_req.source_endpoint = int(payload['System']) #6                 # Wirepas reserved
+    sp_req.destination_endpoint = int(payload['EP']) #100           # Remote API
     sp_req.qos = 1                              # Normal QoS
-    sp_req.payload = b"0501ff"                # Empty Remote API Ping request \x00\x00
+    sp_req.payload = str.encode(payload['Data'])                # Empty Remote API Ping request \x00\x00
 
     # Convert Protocol Buffers message to bytes
     payload = proto_msg.SerializeToString()
@@ -121,7 +133,7 @@ def send_remote_api_ping(client, gw_id, sink_id):
 
 
 def get_node_data(node):
-
+    
     return node
 
 
@@ -131,8 +143,14 @@ def index():
     gateways_and_sinks = {GATEWAY_ID: [SINK_ID], "1": ["sink1"], "5": ["sink1"]}
     data = request.get_json()
 
-    for val in data['payload']:
-        print(val)
+    # for val in data['payload']:
+    #     print(val)
+
+    for gw in data['gateways']:    
+        for payload in data['payload']:
+            send_remote_api_ping(client, gw['GatewayID'], ("sink"+gw['SinkID']), payload)
+
+        # print(gw_id['NetworkID'])
     # print(testData)
     # print("running main loop... %s", data['payload'])
 
@@ -141,10 +159,13 @@ def index():
     #         send_remote_api_ping(client, gw_id, sink_id)
 
     # send_remote_api_ping(client, gw_id, sink_id)
-    return "Hello world"
+    return "Successfully send"
 
 
 if __name__ == "__main__":
+
+    # print(wni.get_gateways())
+
     client = mqtt.Client(clean_session = True)
     client.enable_logger()  # Show exceptions in callbacks 
     # client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -160,5 +181,5 @@ if __name__ == "__main__":
     # Connect to MQTT broker
     print("connecting to %s:%d" % (MQTT_HOST, MQTT_PORT))
     client.connect(MQTT_HOST, MQTT_PORT, 60)
-    # client.loop_start()
+    client.loop_start()
     app.run(debug=True)
